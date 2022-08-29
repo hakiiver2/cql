@@ -1,0 +1,16 @@
+[package]
+name = "cql"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = "3.0.5"
+csv = "1.1"
+prettytable-rs = "^0.9"
+sqlite="^0.27.0"
+
+[dependencies.sqlite3-src]
+version = "0.4"
+features = ["bundled"]
