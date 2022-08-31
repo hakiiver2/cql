@@ -7,6 +7,10 @@ use std::path::Path;
 extern crate prettytable;
 use prettytable::{Cell, Row, Table};
 extern crate csv;
+use sqlite::Type;
+use std::fs::OpenOptions;
+
+
 
 use sqlite;
 
@@ -59,7 +63,7 @@ fn main() {
         if ope == "SELECT" {
             select_table(&connection, query);
         } else if ope == "INSERT" {
-            insert_table(&connection, query, is_sync);
+            insert_table(&connection, &query, is_sync);
         } else if ope == "UPDATE" {
             update_table(&connection, query, is_sync);
         } else if ope == "DELETE" {
@@ -76,10 +80,64 @@ fn update_table(connection: &sqlite::Connection, update_query: String, is_sync: 
     println!("{:?}", stmt.try_next().unwrap());
 }
 
-fn insert_table(connection: &sqlite::Connection, insert_query: String, is_sync: bool) {
-    let insert_query = if is_sync == true { insert_query + " RETURNING *" } else { insert_query };
+fn insert_table(connection: &sqlite::Connection, query: &String, is_sync: bool) {
+    let insert_query = if is_sync == true { String::from(query) + " RETURNING *" } else { String::from(query) };
     let mut stmt = connection.prepare(insert_query).unwrap().into_cursor();
-    println!("{:?}", stmt.try_next().unwrap());
+    let result = stmt.try_next().unwrap().unwrap();
+
+    if is_sync == true {
+        let insert_query_vec: Vec<&str> = query.split(' ').collect();
+        let table_name = insert_query_vec[2];
+        let mut record = Vec::new();
+        for (i, r) in result.iter().enumerate() {
+            if i != 0 {
+                let type_kind = r.kind();
+                match type_kind {
+                    Type::Integer => {
+                        record.push(r.as_integer().unwrap().to_string());
+                    },
+                    Type::String => {
+                        record.push(String::from(r.as_string().unwrap()));
+                    },
+                    Type::Binary => {
+                        // record.push(if r.as_binary().unwrap() == true { "true".to_string() } else { "false".to_string() });
+                        record.push(r.as_binary().unwrap().escape_ascii().to_string());
+                    },
+                    Type::Float => {
+                        record.push(r.as_float().unwrap().to_string());
+                    },
+                    Type::Null => {
+                        record.push(String::from(""));
+                    },
+                }
+            }
+        }
+
+        let file_name = table_name.to_string() + ".csv";
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(file_name)
+            .unwrap();
+
+
+        let mut wtr = csv::Writer::from_writer(file);
+
+        wtr.write_record(&record).unwrap();
+
+
+        // let row_number = result[0].as_integer().unwrap();
+        // let mut rdr = csv::Reader::from_path(table_name).unwrap();
+        // for result in rdr.records() {
+        //     let record = result.unwrap();
+        //     for (i, r) in record.iter().enumerate() {
+        //         if i + 1 == row_number as usize {
+        //
+        //         }
+        //     }
+        // }
+    }
 }
 
 fn delete_table(connection: &sqlite::Connection, delete_query: String, is_sync: bool) {
@@ -128,8 +186,12 @@ fn select_table(connection: &sqlite::Connection, select_query: String) {
 
 fn create_table(connection: &sqlite::Connection, table_name: &String, columns_data: &Vec<String>) {
     let mut column_data = Vec::new();
-    for c in columns_data {
-        column_data.push(c.to_string() + " TEXT");
+    for (i, c) in columns_data.iter().enumerate() {
+        if i == 0 {
+            column_data.push(c.to_string() + " INTEGER PRIMARY KEY AUTOINCREMENT");
+        } else {
+            column_data.push(c.to_string() + " TEXT");
+        }
     }
     let columns = column_data.join(", ");
 
@@ -158,12 +220,13 @@ fn insert_records(
         .join(", ");
 
     let mut insert_query = "".to_string();
-    for record_data in &record_data_list {
-        let placeholders = record_data
+    for (i, record_data) in record_data_list.iter().enumerate() {
+        let placeholders = (i+1).to_string() + ", " + record_data
             .iter()
             .map(|x| x.to_string())
             .collect::<Vec<_>>()
-            .join(", ");
+            .join(", ").as_str();
+
         let query = String::from(format!(
             "insert into {} ({}) values ({})",
             table_name, headers, placeholders
@@ -190,6 +253,7 @@ fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
     let mut rdr = csv::Reader::from_path(path).unwrap();
     let headers = rdr.headers().unwrap().clone();
 
+    header_data.push("cql_row_id".to_string());
     for header in headers.iter() {
         header_data.push(header.to_string());
     }
