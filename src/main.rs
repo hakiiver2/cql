@@ -46,7 +46,6 @@ fn main() {
     let connection = sqlite::open(":memory:").unwrap();
 
     for file in csv_files {
-        println!("{:?}", file);
         let file_name = Path::new(&file)
             .file_stem()
             .unwrap()
@@ -59,7 +58,6 @@ fn main() {
         insert_records(&connection, &file_name, &header_data, record_data_list);
     }
 
-    println!("{:?}", sqlite::version());
     let mut rl = Editor::<()>::new().unwrap();
 
     loop {
@@ -78,11 +76,11 @@ fn main() {
                 } else if ope == "INSERT" {
                     insert_table(&connection, &query, is_sync);
                 } else if ope == "UPDATE" {
-                    update_table(&connection, query, is_sync);
+                    update_table(&connection, &query, is_sync);
                 } else if ope == "DELETE" {
-                    delete_table(&connection, query, is_sync);
+                    delete_table(&connection, &query, is_sync);
                 } else {
-                    connection.execute(query).unwrap();
+                    // connection.execute(query).unwrap();
                 }
             },
             Err(ReadlineError::Interrupted) => {
@@ -97,10 +95,50 @@ fn main() {
     }
 }
 
-fn update_table(connection: &sqlite::Connection, update_query: String, is_sync: bool) {
-    let update_query = if is_sync == true { update_query + " RETURNING *" } else { update_query };
-    let mut stmt = connection.prepare(update_query).unwrap().into_cursor();
-    println!("{:?}", stmt.try_next().unwrap());
+fn write_table_data(connection: &sqlite::Connection, table_name: &String) {
+    let (columns, records) = get_table_data(&connection, table_name.to_string());
+
+    let file_name = get_file_path_in_connection_table(connection, table_name.to_string());
+    let write_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&file_name)
+        .unwrap();
+    let mut wtr = csv::Writer::from_writer(write_file);
+
+    wtr.write_record(&columns).unwrap();
+
+    for record in records {
+        wtr.write_record(&record);
+    }
+}
+
+fn delete_table(connection: &sqlite::Connection, query: &String, is_sync: bool) {
+    let delete_query = if is_sync == true { String::from(query) + " RETURNING *" } else { String::from(query) };
+    let mut stmt = connection.prepare(&delete_query).unwrap().into_cursor();
+    stmt.try_next();
+    if is_sync == true {
+        let delete_query_vec: Vec<&str> = delete_query.split(' ').collect();
+        let re = Regex::new(r"\(.*?\)").unwrap();
+        let table_name = re.replace_all(delete_query_vec[2], "");
+
+        write_table_data(&connection, &table_name.to_string());
+    }
+}
+
+fn update_table(connection: &sqlite::Connection, update_query: &String, is_sync: bool) {   // cql_row_idとかで管理するのは無理っぽい(deleteとかもある)から，変更のたびにselectした結果をcsvに入れた方が楽
+    let mut query = if is_sync == true { String::from(update_query) + " RETURNING *" } else { String::from(update_query) };
+    let mut stmt = connection.prepare(&query).unwrap().into_cursor();
+    stmt.try_next();
+
+    if is_sync == true {
+        select_table(&connection, String::from("SELECT * FROM a;"));
+        let update_query_vec: Vec<&str> = query.split(' ').collect();
+        let re = Regex::new(r"\(.*?\)").unwrap();
+        let table_name = re.replace_all(update_query_vec[1], "");
+
+        write_table_data(&connection, &table_name.to_string());
+    }
 }
 
 fn insert_table(connection: &sqlite::Connection, query: &String, is_sync: bool) {
@@ -113,32 +151,29 @@ fn insert_table(connection: &sqlite::Connection, query: &String, is_sync: bool) 
         let re = Regex::new(r"\(.*?\)").unwrap();
         let table_name = re.replace_all(insert_query_vec[2], "");
 
-
         let mut record = Vec::new();
         for (i, r) in result.iter().enumerate() {
-            if i != 0 {
-                let type_kind = r.kind();
-                match type_kind {
-                    Type::Integer => {
-                        record.push(r.as_integer().unwrap().to_string());
-                    },
-                    Type::String => {
-                        record.push(String::from(r.as_string().unwrap()));
-                    },
-                    Type::Binary => {
-                        record.push(r.as_binary().unwrap().escape_ascii().to_string());
-                    },
-                    Type::Float => {
-                        record.push(r.as_float().unwrap().to_string());
-                    },
-                    Type::Null => {
-                        record.push(String::from(""));
-                    },
-                }
+            let type_kind = r.kind();
+            match type_kind {
+                Type::Integer => {
+                    record.push(r.as_integer().unwrap().to_string());
+                },
+                Type::String => {
+                    record.push(String::from(r.as_string().unwrap()));
+                },
+                Type::Binary => {
+                    record.push(r.as_binary().unwrap().escape_ascii().to_string());
+                },
+                Type::Float => {
+                    record.push(r.as_float().unwrap().to_string());
+                },
+                Type::Null => {
+                    record.push(String::from(""));
+                },
             }
         }
 
-        let file_name = get_file_name_in_connection_table(connection, table_name.to_string());
+        let file_name = get_file_path_in_connection_table(connection, table_name.to_string());
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -151,22 +186,10 @@ fn insert_table(connection: &sqlite::Connection, query: &String, is_sync: bool) 
 
         wtr.write_record(&record).unwrap();
 
-
-        // let row_number = result[0].as_integer().unwrap();
-        // let mut rdr = csv::Reader::from_path(table_name).unwrap();
-        // for result in rdr.records() {
-        //     let record = result.unwrap();
-        //     for (i, r) in record.iter().enumerate() {
-        //         if i + 1 == row_number as usize {
-        //
-        //         }
-        //     }
-        // }
     }
 }
 
-fn get_file_name_in_connection_table(connection: &sqlite::Connection, table_name: String) -> String {
-    println!("{:?}", table_name);
+fn get_file_path_in_connection_table(connection: &sqlite::Connection, table_name: String) -> String {
     let mut cursor = connection
     .prepare(format!("SELECT * FROM cql_connect_file_table WHERE table_name = '{}'", table_name))
     .unwrap()
@@ -175,24 +198,42 @@ fn get_file_name_in_connection_table(connection: &sqlite::Connection, table_name
     let row = cursor.next().unwrap().unwrap();
     let path = row.get::<String, _>(1);
     let re = Regex::new(r"\[.*?\]").unwrap();
-    println!("path = {:?}", path.as_str());
 
-    let brackets_file_name = re.find(path.as_str()).unwrap().as_str();
+    let brackets_file_path = re.find(path.as_str()).unwrap().as_str();
 
-    println!("file_name = {:?}", brackets_file_name);
     let brackets_re = Regex::new(r"\[|\]").unwrap();
-    let file_name = brackets_re.replace_all(brackets_file_name, "");
-    println!("file_name = {:?}", file_name);
+    let file_path = brackets_re.replace_all(brackets_file_path, "");
 
-    return file_name.to_string();
+    return file_path.to_string();
 
 
 }
 
-fn delete_table(connection: &sqlite::Connection, delete_query: String, is_sync: bool) {
-    let delete_query = if is_sync == true { delete_query + " RETURNING *" } else { delete_query };
-    let mut stmt = connection.prepare(delete_query).unwrap().into_cursor();
-    println!("{:?}", stmt.try_next().unwrap());
+fn get_table_data(connection: &sqlite::Connection, table_name: String) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut columns = Vec::new();
+    let mut records = Vec::new();
+    let mut index = 0;
+    connection
+        .iterate(String::from(format!( "SELECT * FROM {};", table_name)), |pairs| {
+            let mut record = Vec::new();
+            index += 1;
+            let count = pairs.iter().count();
+            for &(column, value) in pairs.iter() {
+                let value = if value == None { "" } else { value.unwrap() };
+                record.push(value.to_string());
+                if index == 1 {
+                    columns.push(column.to_string());
+                }
+                if columns.len() == count && record.len() == columns.len() {
+                    records.push(record);
+                    record = Vec::new();
+                }
+            }
+            true
+        })
+        .unwrap();
+
+        return (columns, records);
 }
 
 fn select_table(connection: &sqlite::Connection, select_query: String) {
@@ -205,7 +246,6 @@ fn select_table(connection: &sqlite::Connection, select_query: String) {
             index += 1;
             let count = pairs.iter().count();
             for &(column, value) in pairs.iter() {
-                println!("{:?}", value);
                 let value = if value == None { "" } else { value.unwrap() };
                 record.push(Cell::new(&value.to_string()));
                 if index == 1 {
@@ -235,13 +275,7 @@ fn select_table(connection: &sqlite::Connection, select_query: String) {
 }
 
 fn create_connect_file_table(connection: &sqlite::Connection, file_name: &String, path: &String) {
-    println!("{:?}", file_name);
-    println!("{:?}", path);
-    // let re = Regex::new(r"\.").unwrap();
-    // let path = re.replace_all(path, r"\.");
-    // println!("{}", Path::new(&path).display());
     let path = String::from("[") + path + "]";
-    println!("{:?}", path);
     let create_table_query = &String::from(
             "CREATE TABLE IF NOT EXISTS cql_connect_file_table (table_name TEXT, path TEXT);"
     );
@@ -252,7 +286,6 @@ fn create_connect_file_table(connection: &sqlite::Connection, file_name: &String
             "INSERT INTO cql_connect_file_table (table_name, path) VALUES ('{}', '{}')",
             file_name, path
             ));
-    println!("{:?}", insert_query);
     connection.execute(insert_query).unwrap();
 
     select_table(connection, String::from("SELECT * FROM cql_connect_file_table"));
@@ -262,22 +295,19 @@ fn create_connect_file_table(connection: &sqlite::Connection, file_name: &String
 fn create_table(connection: &sqlite::Connection, table_name: &String, columns_data: &Vec<String>) {
     let mut column_data = Vec::new();
     for (i, c) in columns_data.iter().enumerate() {
-        if i == 0 {
-            column_data.push(c.to_string() + " INTEGER PRIMARY KEY AUTOINCREMENT");
-        } else {
-            column_data.push(c.to_string() + " TEXT");
-        }
+        // if i == 0 {
+        //     column_data.push(c.to_string() + " INTEGER PRIMARY KEY AUTOINCREMENT");
+        // } else {
+        //     column_data.push(c.to_string() + " TEXT");
+        // }
+        column_data.push(c.to_string() + " TEXT");
     }
     let columns = column_data.join(", ");
 
-    println!("{:?}", table_name);
-    println!("{:?}", columns);
-    println!(" CREATE TABLE IF NOT EXISTS {table_name} ({columns}); ");
     let create_table_query = &String::from(format!(
         " CREATE TABLE IF NOT EXISTS {} ({});",
         table_name, columns
     ));
-    println!("{:?}", create_table_query);
 
     connection.execute(create_table_query).unwrap();
 }
@@ -296,11 +326,11 @@ fn insert_records(
 
     let mut insert_query = "".to_string();
     for (i, record_data) in record_data_list.iter().enumerate() {
-        let placeholders = (i+1).to_string() + ", " + record_data
+        let placeholders = record_data
             .iter()
             .map(|x| if x == "" { "NULL" } else {x} )
             .collect::<Vec<_>>()
-            .join(", ").as_str();
+            .join(", ");
 
         let query = String::from(format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -310,7 +340,6 @@ fn insert_records(
         insert_query.push_str(query.as_str());
         insert_query.push_str(" ; ");
     }
-    println!("{:?}", insert_query);
     connection.execute(insert_query).unwrap();
 }
 
@@ -329,7 +358,7 @@ fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
     let mut rdr = csv::Reader::from_path(path).unwrap();
     let headers = rdr.headers().unwrap().clone();
 
-    header_data.push("cql_row_id".to_string());
+    // header_data.push("cql_row_id".to_string());
     for header in headers.iter() {
         header_data.push(header.to_string());
     }
