@@ -132,7 +132,6 @@ fn update_table(connection: &sqlite::Connection, update_query: &String, is_sync:
     stmt.try_next();
 
     if is_sync == true {
-        select_table(&connection, String::from("SELECT * FROM a;"));
         let update_query_vec: Vec<&str> = query.split(' ').collect();
         let re = Regex::new(r"\(.*?\)").unwrap();
         let table_name = re.replace_all(update_query_vec[1], "");
