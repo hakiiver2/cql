@@ -12,17 +12,18 @@ use std::fs::OpenOptions;
 extern crate regex;
 use regex::Regex;
 use rustyline::error::ReadlineError;
-use rustyline::{Editor, Result};
-
-
-
-
+use rustyline::{Editor};
 use sqlite;
 
+
+
+
+
 fn main() {
-    let dir_opt: Arg = Arg::new("dir")
-        .short('d') 
-        .long("dir") 
+
+    let target_opt: Arg = Arg::new("target")
+        .short('t') 
+        .long("target") 
         .takes_value(true)
         .default_value("./"); 
 
@@ -36,11 +37,12 @@ fn main() {
         .author("Author's name")
         .version("v1.0.0")
         .about("Application short description.")
-        .arg(dir_opt)
+        .arg(target_opt)
         .arg(sync_opt);
 
     let matches = app.get_matches();
-    let csv_files = if let Some(dir) = matches.value_of("dir") { read_dir(dir).unwrap()} else { Vec::new() };
+    let csv_files = if let Some(target) = matches.value_of("target") { read_targets(target).unwrap()} else { Vec::new() };
+    
     let is_sync = if let Some(sync) = matches.value_of("sync") { sync == "true" } else { true };
 
     let connection = sqlite::open(":memory:").unwrap();
@@ -62,7 +64,6 @@ fn main() {
 
     loop {
         let readline = rl.readline("QUERY>> ");
-        // let mut query = input_query(&rl);
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
@@ -324,30 +325,27 @@ fn insert_records(
         .join(", ");
 
     let mut insert_query = "".to_string();
-    for (i, record_data) in record_data_list.iter().enumerate() {
+    let mut insert_record_list = Vec::new();
+    for (_, record_data) in record_data_list.iter().enumerate() {
         let placeholders = record_data
             .iter()
-            .map(|x| if x == "" { "NULL" } else {x} )
+            .map(|x| if x == "" { String::from("NULL") } else { String::from(format!("'{}'", x.as_str())) } )
             .collect::<Vec<_>>()
             .join(", ");
 
-        let query = String::from(format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            table_name, headers, placeholders
-        ));
-
-        insert_query.push_str(query.as_str());
-        insert_query.push_str(" ; ");
+        insert_record_list.push(String::from(format!("({})", placeholders)));
     }
-    connection.execute(insert_query).unwrap();
-}
 
-fn input_query() -> String {
-    let mut word = String::new();
-    print!("QUERY> ");
-    stdout().flush().unwrap();
-    stdin().read_line(&mut word).ok();
-    return word.trim().to_string();
+    let query = String::from(format!(
+            "INSERT INTO {} ({}) VALUES {}",
+            table_name, headers, insert_record_list.join(",")
+            ));
+
+    insert_query.push_str(query.as_str());
+    insert_query.push_str(" ;");
+
+    println!("{:?}", insert_query);
+    connection.execute(insert_query).unwrap();
 }
 
 fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
@@ -374,20 +372,26 @@ fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
     return (header_data, record_data_list);
 }
 
-fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<Vec<String>> {
-    Ok(fs::read_dir(path)?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            if entry.file_type().ok()?.is_file() {
-                let is_csv = entry.path().extension()? == "csv";
-                if is_csv {
-                    return Some(entry.file_name().to_string_lossy().into_owned());
-                } else {
-                    return None;
-                }
-            } else {
-                None
-            }
-        })
-        .collect())
+fn read_targets<P: AsRef<Path>>(path: P) -> io::Result<Vec<String>> {
+    if path.as_ref().is_file() {
+        let mut file_vec = Vec::new();
+        if path.as_ref().extension().unwrap() == "csv" {
+            let file = path.as_ref().file_name().unwrap().to_string_lossy().into_owned();
+            file_vec.push(file);
+        }
+        return Ok(file_vec);
+    } else {
+        return Ok(fs::read_dir(path)?
+           .filter_map(|entry| {
+               let entry = entry.ok()?;
+               if entry.file_type().ok()?.is_file() {
+                   let is_csv = entry.path().extension()? == "csv";
+                   if is_csv {
+                       return Some(entry.file_name().to_string_lossy().into_owned());
+                   }
+               }
+               return None
+           })
+           .collect())
+    }
 }
