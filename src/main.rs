@@ -54,8 +54,8 @@ fn main() {
             .to_string_lossy()
             .to_string();
 
-        let (header_data, record_data_list) = read_csv(&file);
-        create_table(&connection, &file_name, &header_data);
+        let (header_data, type_info, record_data_list) = read_csv(&file);
+        create_table(&connection, &file_name, &header_data, &type_info);
         create_connect_file_table(&connection, &file_name, &file);
         insert_records(&connection, &file_name, &header_data, record_data_list);
     }
@@ -292,7 +292,7 @@ fn create_connect_file_table(connection: &sqlite::Connection, file_name: &String
 
 }
 
-fn create_table(connection: &sqlite::Connection, table_name: &String, columns_data: &Vec<String>) {
+fn create_table(connection: &sqlite::Connection, table_name: &String, columns_data: &Vec<String>, type_info: &Vec<String>) {
     let mut column_data = Vec::new();
     for (i, c) in columns_data.iter().enumerate() {
         // if i == 0 {
@@ -300,7 +300,7 @@ fn create_table(connection: &sqlite::Connection, table_name: &String, columns_da
         // } else {
         //     column_data.push(c.to_string() + " TEXT");
         // }
-        column_data.push(c.to_string() + " TEXT");
+        column_data.push(c.to_string() + " " + type_info[i].as_str());
     }
     let columns = column_data.join(", ");
 
@@ -348,8 +348,9 @@ fn insert_records(
     connection.execute(insert_query).unwrap();
 }
 
-fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
+fn read_csv(path: &String) -> (Vec<String>, Vec<String>, Vec<Vec<String>>) {
     let mut header_data = Vec::new();
+    let mut type_info = Vec::new();
     let mut record_data_list = Vec::new();
 
     let mut rdr = csv::Reader::from_path(path).unwrap();
@@ -357,7 +358,13 @@ fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
 
     // header_data.push("cql_row_id".to_string());
     for header in headers.iter() {
-        header_data.push(header.to_string());
+        let mut header_info: Vec<&str> = header.split(':').collect();
+        if header_info.len() == 1 {
+            type_info.push(String::from("TEXT"))
+        } else {
+            type_info.push(header_info.pop().unwrap().to_string());
+        }
+        header_data.push(header_info.join("").to_string());
     }
 
     for result in rdr.records() {
@@ -369,7 +376,7 @@ fn read_csv(path: &String) -> (Vec<String>, Vec<Vec<String>>) {
         record_data_list.push(s);
     }
 
-    return (header_data, record_data_list);
+    return (header_data, type_info, record_data_list);
 }
 
 fn read_targets<P: AsRef<Path>>(path: P) -> io::Result<Vec<String>> {
